@@ -40,6 +40,7 @@ type BulkProcessorService struct {
 	flushInterval time.Duration // periodic flush interval
 	wantStats     bool          // indicates whether to gather statistics
 	backoff       Backoff       // a custom Backoff to use for errors
+	retrier       Retrier       // a custom Retrier for individual requests
 }
 
 // NewBulkProcessorService creates a new BulkProcessorService.
@@ -128,6 +129,12 @@ func (s *BulkProcessorService) Backoff(backoff Backoff) *BulkProcessorService {
 	return s
 }
 
+// Retrier sets the retrier for individual requests.
+func (s *BulkProcessorService) Retrier(retrier Retrier) *BulkProcessorService {
+	s.retrier = retrier
+	return s
+}
+
 // Do creates a new BulkProcessor and starts it.
 // Consider the BulkProcessor as a running instance that accepts bulk requests
 // and commits them to Elasticsearch, spreading the work across one or more
@@ -154,7 +161,8 @@ func (s *BulkProcessorService) Do(ctx context.Context) (*BulkProcessor, error) {
 		s.bulkSize,
 		s.flushInterval,
 		s.wantStats,
-		s.backoff)
+		s.backoff,
+		s.retrier)
 
 	err := p.Start(ctx)
 	if err != nil {
@@ -243,6 +251,7 @@ type BulkProcessor struct {
 	flusherStopC  chan struct{}
 	wantStats     bool
 	backoff       Backoff
+	retrier       Retrier
 
 	startedMu sync.Mutex // guards the following block
 	started   bool
@@ -263,7 +272,8 @@ func newBulkProcessor(
 	bulkSize int,
 	flushInterval time.Duration,
 	wantStats bool,
-	backoff Backoff) *BulkProcessor {
+	backoff Backoff,
+	retrier Retrier) *BulkProcessor {
 	return &BulkProcessor{
 		c:             client,
 		beforeFn:      beforeFn,
@@ -275,6 +285,7 @@ func newBulkProcessor(
 		flushInterval: flushInterval,
 		wantStats:     wantStats,
 		backoff:       backoff,
+		retrier:       retrier,
 	}
 }
 
@@ -429,7 +440,7 @@ func newBulkWorker(p *BulkProcessor, i int) *bulkWorker {
 		i:           i,
 		bulkActions: p.bulkActions,
 		bulkSize:    p.bulkSize,
-		service:     NewBulkService(p.c),
+		service:     NewBulkService(p.c).Retrier(p.retrier),
 		flushC:      make(chan struct{}),
 		flushAckC:   make(chan struct{}),
 	}
